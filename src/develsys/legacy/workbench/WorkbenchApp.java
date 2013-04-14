@@ -63,7 +63,8 @@ public class WorkbenchApp extends Application {
         root.getChildren().addAll(appView, appMenu);
 
         Scene scene = new Scene(root,800,600);
-
+        String customCSSUrl = this.getClass().getResource("css/custom.css").toExternalForm();
+        scene.getStylesheets().add(customCSSUrl);
         primaryStage.setTitle("Legacy Workbench");
         primaryStage.setScene(scene);
         primaryStage.show();
