@@ -1,0 +1,32 @@
+/* 
+    Document   : custom
+    Created on : Apr 8, 2013, 9:17:18 AM
+    Author     : hmariod
+    Description:
+        Purpose of the stylesheet follows.
+*/
+
+.tab-pane *.tab-header-background {
+
+    -fx-background-color: #51555c;
+    -fx-effect: innershadow(two-pass-box , rgba(0,0,0,0.7) , 12, 0.0 , 0 , 0);
+}
+.tab-pane:focused *.tab-header-background {
+    -fx-effect: innershadow(two-pass-box , derive(-fx-focus-color,20%) , 8, 0.4 , 0 , 0);
+}
+#hbNorthStormControlsMenu{
+    -fx-border-color: transparent transparent #CCCCCC transparent;
+    -fx-padding: 0 0 5px 0;
+}
+
+#lbNorthStormControlStatus{
+    /*-fx-background-color: #BBBBBB;*/
+}
+.combo-box-base:disabled {
+    -fx-opacity: 1.0;
+}
+.table-view:disabled {
+    -fx-opacity: 0.8;
+}
+
+
