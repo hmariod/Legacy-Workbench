@@ -1,5 +1,6 @@
 #
-#Sun Apr 14 19:25:10 BRT 2013
+#Wed Apr 17 18:42:15 BRT 2013
 NorthStormBench=yes
 lastUsedPort=usbserial-AH01KSW2
 servicesHost=direct.playcenter.com.br
+servicesRootPath=/legacy/services/northstormWB/
