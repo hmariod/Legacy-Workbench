@@ -15,7 +15,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
-import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.Formatter;
 import java.util.Timer;
@@ -67,7 +66,7 @@ public class NorthStormBenchView extends AnchorPane{
     private ComboBox cmbSelectComm;
     private ComboBox cmbSelectBaudRate;
     private Button btnToogleConnection;
-    private TextArea taCommIntput;
+    private TextArea txtAreaLog;
     private Label lbCommPortStatus;
     private Label lbNorthStormControlsStatus;
     private Button btnSendSeeking;
@@ -77,7 +76,7 @@ public class NorthStormBenchView extends AnchorPane{
     private ImageView imgCTS;
     private Stage primaryStage;
     private WorkbenchApp app;
-    private Tab tabTerminal;
+    private Tab tabLog;
     private Tab tabNorthStormControls;
     private TableView tableUnsetDevices;
     private ObservableList<UnsetDevice> deviceList = FXCollections.observableArrayList();;
@@ -100,10 +99,12 @@ public class NorthStormBenchView extends AnchorPane{
     /** Default bits per second for COM port. */
     private static final int DATA_RATE = 9600;
     private Timer tmCommTimeout;
+    private boolean cancelTimeoutTask;
     private int seekCounter;
     private byte[] rxBuffer = new byte[100];
     private int rxBytesReceived = 0;
     private UnsetDevice currentUnsetDevice;
+    private int counter = 0;
     
     public NorthStormBenchView(){}
     
@@ -128,7 +129,6 @@ public class NorthStormBenchView extends AnchorPane{
             public void handle(ActionEvent event) {
                 if(serialPort == null){
                     getPorts();
-                    System.out.println("reloadPortsListButton called.\n");
                 }
             }
         });
@@ -265,9 +265,10 @@ public class NorthStormBenchView extends AnchorPane{
         tabNorthStormControls.setContent(vboxTabNorthStormContensWraper);
         
         //Create tab Terminal and set content
-        taCommIntput = new TextArea();
-        tabTerminal = new Tab("Terminal");
-        tabTerminal.setContent(taCommIntput);
+        txtAreaLog = new TextArea();
+        txtAreaLog.setEditable(false);
+        tabLog = new Tab("Log");
+        tabLog.setContent(txtAreaLog);
         
         //Create TabPanel and add TabNorthStormControls + TabTerminal
         TabPane tabPanel = new TabPane();
@@ -276,7 +277,7 @@ public class NorthStormBenchView extends AnchorPane{
         setTopAnchor(tabPanel, 42.0);
         setLeftAnchor(tabPanel, 0.0);
         setRightAnchor(tabPanel, 0.0);
-        tabPanel.getTabs().addAll(tabNorthStormControls, tabTerminal);
+        tabPanel.getTabs().addAll(tabNorthStormControls, tabLog);
         
         //Add CommControlMenuWraper + TabPanel
         getChildren().addAll(hbCommControlsWraper, tabPanel);
@@ -291,21 +292,68 @@ public class NorthStormBenchView extends AnchorPane{
                 if(serialPort != null){
                     serialPort.close();
                 }
+                if(tmCommTimeout != null){
+                    tmCommTimeout.cancel();
+                }
             }
         });
         
-        taCommIntput.setOnKeyPressed(new EventHandler<KeyEvent>() {
+        txtAreaLog.setOnKeyPressed(new EventHandler<KeyEvent>() {
             @Override
             public void handle(KeyEvent t) {
                 if(t.getCode().equals(KeyCode.ENTER)){
                     if(serialPort != null){
-                        CharSequence paragraphs[] = taCommIntput.getParagraphs().toArray(new CharSequence[0]);
+                        CharSequence paragraphs[] = txtAreaLog.getParagraphs().toArray(new CharSequence[0]);
                         String strCmd = paragraphs[paragraphs.length-1].toString();
                         try {
                             sendCmd(strCmd.getBytes("UTF8"), true);
                         } catch (UnsupportedEncodingException ex) {
+                            txtAreaLog.appendText("\ntaCommIntput.setOnKeyPressed UnsupportedEncodingException error");
                             Logger.getLogger(TerminalView.class.getName()).log(Level.SEVERE, null, ex);
                         }                        
+                    }
+                }
+            }
+        });
+        
+        this.setOnKeyPressed(new EventHandler<KeyEvent>() {
+
+            @Override
+            public void handle(KeyEvent t) {
+                if(t.getCode().equals(KeyCode.F4)){
+                    if(!btnToogleConnection.disableProperty().get()){
+                        Platform.runLater(new Runnable() {
+                            @Override
+                            public void run() {
+                                getPorts();
+                            }
+                        });
+                    }
+                }else if(t.getCode().equals(KeyCode.F5)){
+                    if(!btnSendSeeking.disableProperty().get()){
+                        sendSeek(3);
+                    }
+                }else if(t.getCode().equals(KeyCode.F10)){
+                    if(!btnToogleConnection.disableProperty().get()){
+                        if("Open".equals(btnToogleConnection.getText())){
+                            openComm(currentPortIdentifier);
+                        }else{
+                            closeComm();
+                        }
+                    }
+                }else if(t.getCode().equals(KeyCode.F6)){
+                    if(!btnToogleConnection.disableProperty().get()){
+                        if(!"Open".equals(btnToogleConnection.getText())){
+                            try {
+                                serialPort.setDTR(true);
+                                Thread.sleep(10);
+                                serialPort.setDTR(false);
+                            } catch (InterruptedException ex) {
+                                Logger.getLogger(NorthStormBenchView.class.getName()).log(Level.SEVERE, null, ex);
+                            }
+                            serialPort.setDTR(false);
+                            
+                        }
                     }
                 }
             }
@@ -439,34 +487,52 @@ public class NorthStormBenchView extends AnchorPane{
                 public void serialEvent(SerialPortEvent spe) {
                     switch(spe.getEventType()) {
                         case SerialPortEvent.OUTPUT_BUFFER_EMPTY:
-                            imgTX.setVisible(false);
+                            Platform.runLater(new Runnable() {
+                                @Override
+                                public void run() {
+                                    imgTX.setVisible(false);
+                                }
+                            });
+                            if(tmCommTimeout != null){
+                                tmCommTimeout.cancel();
+                            }
+                            tmCommTimeout = new Timer();
+                            tmCommTimeout.schedule(new TskCommTimeout(), 100);
+                            cancelTimeoutTask = false;
                             break;
                         case SerialPortEvent.DATA_AVAILABLE:
                             try{
+                                imgTX.setVisible(false);
                                 imgRX.setVisible(true);
                                 int available = input.available();
                                 byte chunk[] = new byte[available];
                                 int read = input.read(chunk, 0, available);
                                 System.arraycopy(chunk, 0, rxBuffer, rxBytesReceived, read);
                                 rxBytesReceived += read;
-                                taCommIntput.appendText(bytesToHexString(chunk).toUpperCase());
-                                taCommIntput.appendText("\n");
+//                                taCommIntput.appendText(bytesToHexString(chunk).toUpperCase());
+//                                taCommIntput.appendText("\n");
                                 if(rxBuffer[rxBytesReceived -1] == (byte)0xFE){
+                                    System.out.println("RX reach EOT\n");
                                     Platform.runLater(new Runnable() {
                                         @Override
                                         public void run() {
                                             imgRX.setVisible(false);
-                                            procCommAnswer();
+                                            procCommAnswer(false);
                                         }
                                     });
-                                    //procCommAnswer();
                                 }
                             }catch(Exception ex){
                                 System.out.println("DATA_AVAILABLE Exception: " + ex.toString());
                             }
                             break;
                         case SerialPortEvent.CTS:
-                            imgCTS.setVisible(serialPort.isCTS());
+                            Platform.runLater(new Runnable() {
+                                @Override
+                                public void run() {
+                                    imgCTS.setVisible(serialPort.isCTS());
+                                    closeComm();
+                                }
+                            });
                             break;
                     }
                 }
@@ -482,6 +548,7 @@ public class NorthStormBenchView extends AnchorPane{
         } catch (PortInUseException | UnsupportedCommOperationException er) {
             System.out.println("Error open Comm: " + er.toString());
             setCommPortStatus(CommPortStatus.ERROR);
+            getPorts();
             return false;
         }
         System.out.println("Comm open");
@@ -489,12 +556,15 @@ public class NorthStormBenchView extends AnchorPane{
         CommCmbItem selCommCmbItem = (CommCmbItem)cmbSelectComm.getSelectionModel().getSelectedItem();
         app.setAppProperty("lastUsedPort", selCommCmbItem.portName);
         imgCTS.setVisible(serialPort.isCTS());
+        txtAreaLog.appendText("-----\nComm open.");
+        serialPort.setDTR(false);
         return true;
     };
     
     private void sendCmd(byte[] bytes, boolean addNullEnd){
         try{
-            serialPort.setDTR(true);
+            counter++;
+            imgTX.setVisible(false);
             try{
                 output.write(bytes);
             }catch(IOException ex){
@@ -509,9 +579,8 @@ public class NorthStormBenchView extends AnchorPane{
                 output.write(0x00);
             }
             rxBytesReceived = 0;
-            tmCommTimeout = new Timer();
-            tmCommTimeout.schedule(new TskCommTimeout(), 300);
             imgTX.setVisible(true);
+            System.out.println(counter + "-sendCmd:" + controlStatus.toString());
         } catch (Exception ex) {
             closeComm();
         }
@@ -524,6 +593,7 @@ public class NorthStormBenchView extends AnchorPane{
             serialPort = null;
         }
         setCommPortStatus(CommPortStatus.CLOSED);
+        txtAreaLog.appendText("\nComm closed\n");
     };
     /****** End Comm Port functions ********/
     
@@ -542,24 +612,24 @@ public class NorthStormBenchView extends AnchorPane{
     private boolean getUnsetDevices(){
         boolean result;
         HttpSimpleClient sc = new HttpSimpleClient(app.getAppProperty("servicesHost"));
-        String url = "/legacy/services/northstormWB/getunsetdevices.asp";
+        String url = app.getAppProperty("servicesRootPath") + "getunsetdevices.asp";
         result = sc.get(url);
         if(!result){
-            taCommIntput.appendText("Não foi posível completar a operação\nServiço momentaneamente indisponível.\n");
+            txtAreaLog.appendText("Não foi posível completar a operação\nServiço momentaneamente indisponível.\n");
             return false;
         }
         if(sc.resultCode != 200){
-            taCommIntput.appendText("Não foi posível completar a operação\nResult code: " + sc.resultCode + ".\n\n");
+            txtAreaLog.appendText("Não foi posível completar a operação\nResult code: " + sc.resultCode + ".\n\n");
             return false;
         }
         
         String answers[] = sc.body.split("\\r?\\n");
         if("Result:Empty".equals(answers[0])){
-            taCommIntput.appendText("Não tem dispositivos disponíveis para gravação.\n");
+            txtAreaLog.appendText("Não tem dispositivos disponíveis para gravação.\n");
             return false;
         }
         if("Result:Error".equals(answers[0])){
-            taCommIntput.appendText("Não foi posível completar a operação. O serviço retornou com error/s -> " + answers[1] + ".\n");
+            txtAreaLog.appendText("Não foi posível completar a operação. O serviço retornou com error/s -> " + answers[1] + ".\n");
             return false;
         }
         if("Result:OK".equals(answers[0])){
@@ -571,38 +641,37 @@ public class NorthStormBenchView extends AnchorPane{
             }
             return true;
         }
-        taCommIntput.appendText("Não foi posível completar a operação. Código de resposta inesperado -> " + sc.body + ".\n");
+        txtAreaLog.appendText("Não foi posível completar a operação. Código de resposta inesperado -> " + sc.body + ".\n");
         return false;
     }
     
     private boolean setUnsetDevice(String owner, String numero, String boca, String setValue){
         boolean result;
         HttpSimpleClient sc = new HttpSimpleClient(app.getAppProperty("servicesHost"));
-        String url = "/legacy/services/northstormWB/setunsetdevice.asp";
+        String url = app.getAppProperty("servicesRootPath") + "setunsetdevice.asp";
         url += "?Owner=" + owner;
         url += "&Numero=" + numero;
         url += "&Boca=" + boca;
         url += "&setValue=" + setValue;
         result = sc.get(url);
         if(!result){
-            taCommIntput.appendText("SetUnsetDevices, Não foi posível completar a operação\nServiço momentaneamente indisponível.\n");
+            txtAreaLog.appendText("SetUnsetDevices, Não foi posível completar a operação\nServiço momentaneamente indisponível.\n");
             return false;
         }
         if(sc.resultCode != 200){
-            taCommIntput.appendText("SetUnsetDevices, Não foi posível completar a operação\nResult code: " + sc.resultCode + ".\n\n");
+            txtAreaLog.appendText("SetUnsetDevices, Não foi posível completar a operação\nResult code: " + sc.resultCode + ".\n\n");
             return false;
         }
         
         String answers[] = sc.body.split("\\r?\\n");
         if("Result:Error".equals(answers[0])){
-            taCommIntput.appendText("Não foi posível completar a operação. SetUnsetDevices, O serviço retornou com error/s -> " + answers[1] + ".\n");
+            txtAreaLog.appendText("Não foi posível completar a operação. SetUnsetDevices, O serviço retornou com error/s -> " + answers[1] + ".\n");
             return false;
         }
         if("Result:OK".equals(answers[0])){
-            taCommIntput.appendText("setUnsetDevices OK.\n ");
             return true;
         }
-        taCommIntput.appendText("Não foi posível completar a operação. SetUnsetDevices, Código de resposta inesperado -> " + sc.body + ".\n");
+        txtAreaLog.appendText("Não foi posível completar a operação. SetUnsetDevices, Código de resposta inesperado -> " + sc.body + ".\n");
         return false;
     }
     
@@ -715,26 +784,40 @@ public class NorthStormBenchView extends AnchorPane{
     class TskCommTimeout extends TimerTask{
         @Override
         public void run() {
-            tmCommTimeout.cancel();
-             System.out.println("Timeout\n");
+            this.cancel();
+            System.out.println("Timeout-Recived:" + rxBytesReceived + "\n");
             Platform.runLater(new Runnable() {
                 @Override
                 public void run() {
-                    procCommAnswer();
+                    procCommAnswer(true);
                 }
             });
         };
     };
     
-    private void procCommAnswer(){
-        tmCommTimeout.cancel();
+    private void procCommAnswer(boolean fromTimeout){
         imgRX.setVisible(false);
+        imgTX.setVisible(false);
+        System.out.println("procCommAnswer called fromtimeout:" + fromTimeout);
+        if(tmCommTimeout != null){
+            tmCommTimeout.cancel();
+        }
+        if(cancelTimeoutTask){
+            return;
+        }
+        cancelTimeoutTask = true;
         switch(controlStatus){
             case SEEKING:
                 if(rxBytesReceived == 0){
+//                    try {
+//                        //serialPort.setDTR(true);
+//                        Thread.sleep(1000);
+//                        //serialPort.setDTR(false);
+//                    } catch (InterruptedException ex) {
+//                        Logger.getLogger(NorthStormBenchView.class.getName()).log(Level.SEVERE, null, ex);
+//                    }
                     if(seekCounter > 0){
-                        lbNorthStormControlsStatus.setText("Status: Seeking again");
-                        seekCounter--;
+                        lbNorthStormControlsStatus.setText("Status: Seeking...");
                         sendSeek(seekCounter);
                     }else{
                         setControlStatus(ControlStatus.STOPPED);
@@ -766,9 +849,9 @@ public class NorthStormBenchView extends AnchorPane{
                     }else if(rxBuffer[4] == (byte)0xEE){
                         setControlStatus(ControlStatus.DEVICEWAITPERSON);
                     }
-                    taCommIntput.appendText("\nrxBuffer:");
-                    taCommIntput.appendText(bytesToHexString(rxBuffer).toUpperCase());
-                    taCommIntput.appendText("\n");
+//                    taCommIntput.appendText("\nrxBuffer:");
+//                    taCommIntput.appendText(bytesToHexString(rxBuffer).toUpperCase());
+//                    taCommIntput.appendText("\n");
                 }
                 break;
             case SETTINGPERSON:
@@ -780,19 +863,19 @@ public class NorthStormBenchView extends AnchorPane{
                     lbNorthStormControlsStatus.setText("Status: Device personalized.");
                     if(!setUnsetDevice(currentUnsetDevice.getOwner(), currentUnsetDevice.getNumero(),currentUnsetDevice.getBoca(), "1")){
                         lbNorthStormControlsStatus.setText("Status: Device personalized, database fail, stopped to avoid duplications.");
+                        txtAreaLog.appendText("\nPersonalizing fail, device:" + currentUnsetDevice.getOwner() + "-" + currentUnsetDevice.getNumero() + "/" + currentUnsetDevice.getBoca());
                     }else{
+                        txtAreaLog.appendText("\nPersonalizing succed, device:" + currentUnsetDevice.getOwner() + "-" + currentUnsetDevice.getNumero() + "/" + currentUnsetDevice.getBoca());
                         reloadUnsetDevicesTable();
                         sendSeek(2);
                     }
                 }else{
-                    taCommIntput.appendText("\nrxPersonalize:");
-                    taCommIntput.appendText(bytesToHexString(rxBuffer).toUpperCase());
-                    taCommIntput.appendText("\n");
+                    txtAreaLog.appendText("\nPersonalizing answer missmatch, device:" + currentUnsetDevice.getOwner() + "-" + currentUnsetDevice.getNumero() + "/" + currentUnsetDevice.getBoca());
                     lbNorthStormControlsStatus.setText("Status: Personalize fail: device answer missmatch.");
                     btnSendSeeking.setDisable(false);
                 }
             default:
-                System.out.println("ProcCommAnswer reach controlStatus default:" + controlStatus.toString());
+                txtAreaLog.appendText("\nProcCommAnswer reach controlStatus default:" + controlStatus.toString());
         }
     };
     
@@ -803,7 +886,7 @@ public class NorthStormBenchView extends AnchorPane{
             byte[] bytesCmd = new byte[26];
             bytesCmd[3] = (byte)0x80;               //Address
             bytesCmd[4] = (byte)0xEE;               //Cmd = PERSON
-            bytesCmd[5] = (byte)0x80;               //Address for EEProm
+            bytesCmd[5] = (byte)0x7A;               //Address for EEProm
             bytesCmd[6] = (byte)0xEE;               //Cmd = PERSON
             byte[] tmp = currentUnsetDevice.gettDispositivo().getBytes("UTF8");
             bytesCmd[7] = (byte)(tmp[0] & 0x0F);    //TDispositivo
@@ -823,9 +906,9 @@ public class NorthStormBenchView extends AnchorPane{
             bytesCmd = prepareSendMsg(bytesCmd);
             setControlStatus(ControlStatus.SETTINGPERSON);
             sendCmd(bytesCmd, false);
-                        taCommIntput.appendText("\nconvert:");
-                        taCommIntput.appendText(bytesToHexString(bytesCmd).toUpperCase());
-                        taCommIntput.appendText("\n");
+//                        taCommIntput.appendText("\nconvert:");
+//                        taCommIntput.appendText(bytesToHexString(bytesCmd).toUpperCase());
+//                        taCommIntput.appendText("\n");
         } catch (UnsupportedEncodingException ex) {
             Logger.getLogger(NorthStormBenchView.class.getName()).log(Level.SEVERE, null, ex);
         }
@@ -872,9 +955,16 @@ public class NorthStormBenchView extends AnchorPane{
     };
     
     private void sendSeek(int qty){
+        try {
+            serialPort.setDTR(true);
+            Thread.sleep(10);
+            serialPort.setDTR(false);
+        } catch (InterruptedException ex) {
+            Logger.getLogger(NorthStormBenchView.class.getName()).log(Level.SEVERE, null, ex);
+        }
         byte[] msg = hexStringToByteArray("ffff7a80faff");
-        seekCounter = qty;
-        controlStatus = ControlStatus.SEEKING;        
+        seekCounter = --qty;
+        controlStatus = ControlStatus.SEEKING;
         sendCmd(msg, false);
     }
     

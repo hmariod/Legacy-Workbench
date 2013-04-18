@@ -50,6 +50,9 @@ public class WorkbenchApp extends Application {
             if("".equals(getAppProperty("servicesHost"))){
                 setAppProperty("servicesHost", "direct.playcenter.com.br");
             }
+            if("".equals(getAppProperty("servicesRootPath"))){
+                setAppProperty("servicesRootPath", "/legacy/services/northstormWB/");
+            }
         }
         //User Interfase
         this.primaryStage = primaryStage;
